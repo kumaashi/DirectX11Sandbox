@@ -11,8 +11,6 @@
 #include <algorithm>
 #include <DirectXMath.h>
 
-#include "FreeImage.h"
-
 
 #pragma comment(lib, "D3DCompiler.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -27,6 +25,10 @@
 #pragma comment(lib, "libfbxsdk-mt.lib")
 #pragma comment(lib, "libxml2-mt.lib")
 #pragma comment(lib, "zlib-mt.lib")
+
+#include "FreeImage.h"
+#pragma comment(lib, "FreeImage.lib")
+
 
 
 enum {
@@ -62,6 +64,13 @@ struct vector4 {
 	}
 };
 
+struct vector3 {
+	float x, y, z;
+	void print() {
+		printf("%.5f, %.5f\n", x, y, z);
+	}
+};
+
 struct vector2 {
 	float x, y;
 	void print() {
@@ -71,6 +80,7 @@ struct vector2 {
 
 struct vertex_format {
 	vector4 pos;
+	vector3 nor;
 	vector2 uv;
 };
 
@@ -455,36 +465,23 @@ void PresentGraphics(
 			UINT offset = 0;
 			ctx->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 			ctx->IASetPrimitiveTopology( D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			//ctx->IASetPrimitiveTopology( D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
 			//ctx->IASetPrimitiveTopology( D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
 		}
 
-		//CMD_SET_INDEX
-		if(type == CMD_SET_INDEX) {
-			auto ib = mbuf[name];
-			if(ib == nullptr) {
-				D3D11_BUFFER_DESC bd = {
-					c.set_index.size, D3D11_USAGE_DYNAMIC, D3D11_BIND_INDEX_BUFFER, 0, 0, 0
-				};
-				bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-				auto hr = dev->CreateBuffer(&bd, nullptr, &ib);
-				mbuf[name] = ib;
-				printf("name=%s, ib=%p size=%d\n", name.c_str(), ib, c.set_index.size);
-
-				D3D11_MAPPED_SUBRESOURCE msr = {};
-				ctx->Map(ib, 0, D3D11_MAP_WRITE_DISCARD, 0, &msr);
-				if(msr.pData) {
-					memcpy(msr.pData, c.set_index.data, c.set_index.size);
-					ctx->Unmap(ib, 0);
-				} else {
-					printf("error CMD_SET_INDEX name=%s Can't map\n", name.c_str());
-				}
-			}
-			ctx->IASetIndexBuffer(ib, DXGI_FORMAT_R32_UINT, 0 );
-		}
 
 		//CMD_SET_SHADER
 		if(type == CMD_SET_SHADER) {
+			auto is_update = c.set_shader.is_update;
 			auto pstate = mpstate[name];
+			if(is_update) {
+				if(pstate.layout) pstate.layout->Release();
+				if(pstate.vs) pstate.vs->Release();
+				if(pstate.gs) pstate.gs->Release();
+				if(pstate.ps) pstate.ps->Release();
+				mpstate.erase(name);
+				pstate = mpstate[name];
+			}
 			if(pstate.vs == nullptr) {
 				ID3DBlob *pBlobVS = NULL;
 				ID3DBlob *pBlobGS = NULL;
@@ -504,8 +501,9 @@ void PresentGraphics(
 						pBlobPS->GetBufferPointer(), pBlobPS->GetBufferSize(), NULL, &pstate.ps);
 				if(pstate.vs) {
 					D3D11_INPUT_ELEMENT_DESC layout[] = {
-						{ "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-						{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+						{ "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0,                            D3D11_INPUT_PER_VERTEX_DATA, 0 },
+						{ "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT,    0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+						{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,       0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 					};
 					dev->CreateInputLayout(
 						layout, _countof(layout),
@@ -518,6 +516,7 @@ void PresentGraphics(
 					if(pstate.vs) pstate.vs->Release();
 					if(pstate.gs) pstate.gs->Release();
 					if(pstate.ps) pstate.ps->Release();
+					mpstate.erase(name);
 				}
 
 				if(pBlobVS) pBlobVS->Release();
@@ -553,10 +552,45 @@ void PresentGraphics(
 			else
 				printf("Error CMD_CLEAR name=%s not found\n", name.c_str());
 		}
+		
+
+		//CMD_SET_INDEX
+		if(type == CMD_SET_INDEX) {
+			auto ib = mbuf[name];
+			if(ib == nullptr) {
+				D3D11_BUFFER_DESC bd = {
+					c.set_index.size, D3D11_USAGE_DYNAMIC, D3D11_BIND_INDEX_BUFFER, 0, 0, 0
+				};
+				bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+				auto hr = dev->CreateBuffer(&bd, nullptr, &ib);
+				mbuf[name] = ib;
+				printf("name=%s, ib=%p size=%d\n", name.c_str(), ib, c.set_index.size);
+
+				D3D11_MAPPED_SUBRESOURCE msr = {};
+				ctx->Map(ib, 0, D3D11_MAP_WRITE_DISCARD, 0, &msr);
+				if(msr.pData) {
+					memcpy(msr.pData, c.set_index.data, c.set_index.size);
+					ctx->Unmap(ib, 0);
+				} else {
+					printf("error CMD_SET_INDEX name=%s Can't map\n", name.c_str());
+				}
+			}
+			//ctx->IASetIndexBuffer(ib, DXGI_FORMAT_R32_UINT, 0 );
+		}
+		
 		//CMD_DRAW_INDEX
 		if(type == CMD_DRAW_INDEX) {
 			auto count = c.draw_index.count;
-			ctx->DrawIndexed(count, 0, 0);
+			//ctx->DrawIndexed(count, 0, 0);
+			ctx->DrawInstanced(count, 1, 0, 0);
+/*
+void DrawInstanced(
+UINT VertexCountPerInstance,
+UINT InstanceCount,
+UINT StartVertexLocation,
+UINT StartInstanceLocation
+);
+			*/
 		}
 	}
 	swapchain->Present(1, 0);
@@ -992,151 +1026,17 @@ struct Image {
 	
 };
 
+
 struct GeometryData {
-	std::map<std::string, std::vector<vector4>> mvb;
+	std::map<std::string, std::vector<vertex_format>> mvtx;
 	std::map<std::string, std::vector<uint32_t>> mib;
-	std::map<std::string, std::vector<vector2>> muv;
 	std::map<std::string, std::string> mmaterial;
 };
 
 
 
-
-void LoadFbxToGeometryData2(FbxNode *node, GeometryData & geo) {
-	auto name = node->GetName();
-	auto attr = node->GetNodeAttribute();
-	printf("%s : name=%s\n", __FUNCTION__, name);
-	if (attr && attr->GetAttributeType() == FbxNodeAttribute::eMesh) {
-		auto mesh = node->GetMesh();
-		//printf("name=%s, mesh->GetControlPointsCount()=%d\n", name, mesh->GetControlPointsCount());
-		//printf("name=%s, mesh->GetPolygonVertexCount()=%d\n", name, mesh->GetPolygonVertexCount());
-		std::vector<vector4> vvb;
-		std::vector<vector2> vuv;
-		std::vector<uint32_t> vib;
-
-		for (int i = 0; i < mesh->GetControlPointsCount(); i++) {
-			vector4 v;
-			v.x = (FLOAT)mesh->GetControlPointAt(i)[0];
-			v.y = (FLOAT)mesh->GetControlPointAt(i)[1];
-			v.z = (FLOAT)mesh->GetControlPointAt(i)[2];
-			v.w = 1.0f;
-			vvb.push_back(v);
-		}
-		auto idxbuf = mesh->GetPolygonVertices();
-		for (int i = 0; i < mesh->GetPolygonVertexCount(); i++) {
-			auto idx = idxbuf[i];
-			vib.push_back(idx);
-		}
-		auto elementCount = mesh->GetElementUVCount();
-		printf("elementCount=%d\n", elementCount);
-		auto element = mesh->GetElementUV(0); //tentateive
-		auto mappingMode = element->GetMappingMode();
-		auto referenceMode = element->GetReferenceMode();
-		const auto & indexArray = element->GetIndexArray();
-		const auto & directArray = element->GetDirectArray();
-		vuv.reserve(vib.size());
-		if (mappingMode == FbxGeometryElement::eByControlPoint) {
-			for (auto index : vib)
-			{
-				auto uvIndex = (referenceMode == FbxGeometryElement::eDirect)
-					? index : indexArray.GetAt(index);
-				auto uv = directArray.GetAt(uvIndex);
-				vuv.push_back({(float)uv[0], (float)uv[1]});
-			}
-		} else if (mappingMode == FbxGeometryElement::eByPolygonVertex) {
-			auto indexByPolygonVertex = 0;
-			auto polygonCount = mesh->GetPolygonCount();
-			for (int i = 0; i < polygonCount; ++i)
-			{
-				auto polygonSize = mesh->GetPolygonSize(i);
-
-				for (int j = 0; j < polygonSize; ++j)
-				{
-					auto uvIndex = (referenceMode == FbxGeometryElement::eDirect)
-						? indexByPolygonVertex : indexArray.GetAt(indexByPolygonVertex);
-					auto uv = directArray.GetAt(uvIndex);
-					vuv.push_back({(float)uv[0], (float)uv[1]});
-					++indexByPolygonVertex;
-				}
-			}
-		}
-		
-		geo.mvb[name] = vvb;
-		geo.mib[name] = vib;
-		geo.muv[name] = vuv;
-	}
-	for (int i = 0; i < node->GetChildCount(); i++) {
-		LoadFbxToGeometryData(node->GetChild(i), geo);
-	}
-}
-
-void LoadFbxToGeometryData(FbxNode *node, GeometryData & geo) {
-	auto name = node->GetName();
-	auto attr = node->GetNodeAttribute();
-	if (attr && attr->GetAttributeType() == FbxNodeAttribute::eMesh) {
-		auto mesh = node->GetMesh();
-		std::vector<vector4> vvb;
-		std::vector<vector2> vuv;
-		std::vector<uint32_t> vib;
-
-		for (int i = 0; i < mesh->GetControlPointsCount(); i++) {
-			vector4 v;
-			v.x = (FLOAT)mesh->GetControlPointAt(i)[0];
-			v.y = (FLOAT)mesh->GetControlPointAt(i)[1];
-			v.z = (FLOAT)mesh->GetControlPointAt(i)[2];
-			v.w = 1.0f;
-			vvb.push_back(v);
-		}
-		auto idxbuf = mesh->GetPolygonVertices();
-		for (int i = 0; i < mesh->GetPolygonVertexCount(); i++) {
-			auto idx = idxbuf[i];
-			vib.push_back(idx);
-		}
-		auto elementCount = mesh->GetElementUVCount();
-		printf("elementCount=%d\n", elementCount);
-		auto element = mesh->GetElementUV(0); //tentateive
-		auto mappingMode = element->GetMappingMode();
-		auto referenceMode = element->GetReferenceMode();
-		const auto & indexArray = element->GetIndexArray();
-		const auto & directArray = element->GetDirectArray();
-		vuv.reserve(vib.size());
-		if (mappingMode == FbxGeometryElement::eByControlPoint) {
-			for (auto index : vib)
-			{
-				auto uvIndex = (referenceMode == FbxGeometryElement::eDirect)
-					? index : indexArray.GetAt(index);
-				auto uv = directArray.GetAt(uvIndex);
-				vuv.push_back({(float)uv[0], (float)uv[1]});
-			}
-		} else if (mappingMode == FbxGeometryElement::eByPolygonVertex) {
-			auto indexByPolygonVertex = 0;
-			auto polygonCount = mesh->GetPolygonCount();
-			for (int i = 0; i < polygonCount; ++i)
-			{
-				auto polygonSize = mesh->GetPolygonSize(i);
-
-				for (int j = 0; j < polygonSize; ++j)
-				{
-					auto uvIndex = (referenceMode == FbxGeometryElement::eDirect)
-						? indexByPolygonVertex : indexArray.GetAt(indexByPolygonVertex);
-					auto uv = directArray.GetAt(uvIndex);
-					vuv.push_back({(float)uv[0], (float)uv[1]});
-					++indexByPolygonVertex;
-				}
-			}
-		}
-		
-		geo.mvb[name] = vvb;
-		geo.mib[name] = vib;
-		geo.muv[name] = vuv;
-	}
-	for (int i = 0; i < node->GetChildCount(); i++) {
-		LoadFbxToGeometryData(node->GetChild(i), geo);
-	}
-}
-
 void
-LoadFbxToVector4(std::string name,
+LoadFbxFromFile(std::string name,
 	GeometryData & geo)
 {
 	auto fbxManager = FbxManager::Create();
@@ -1149,14 +1049,8 @@ LoadFbxToVector4(std::string name,
 		FbxGeometryConverter geometryConverter(fbxManager);
 		geometryConverter.Triangulate(fbxScene, true);
 
-		int cnt = fbxScene->GetGeometryCount();
-		auto node = fbxScene->GetRootNode();
-		LoadFbxToGeometryData(node, geo);
-		
-		
-		
+		//マテリアルの情報を読み込んでしまう
 		auto materialCount = fbxScene->GetMaterialCount();
-		printf("materialCount: %d\n", materialCount);
 		std::vector<std::string> vmatname;
 		for (int i = 0; i < materialCount; ++i)
 		{
@@ -1191,11 +1085,10 @@ LoadFbxToVector4(std::string name,
 						auto tex = fbxProperty.GetSrcObject<FbxFileTexture>(j);
 						std::string texName = tex->GetFileName();
 						texName = texName.substr(texName.find_last_of('/') + 1);
-						printf("texName=%s\n", texName.c_str());
 
 						if (src == "Maya|DiffuseTexture")
 						{
-							
+							printf("texName=%s\n", texName.c_str());
 							vmatname.push_back(texName);
 						}
 						/*
@@ -1220,9 +1113,167 @@ LoadFbxToVector4(std::string name,
 				}
 			}
 		}
-		for(auto & m : geo.muv) {
+
+		//シーンメッシュごとに読み込み
+		auto meshCount = fbxScene->GetMemberCount<FbxMesh>();
+		for (int mi = 0; mi < meshCount; mi++) {
+			auto mesh = fbxScene->GetMember<FbxMesh>(mi);
+			auto name = mesh->GetNode()->GetName();
+			printf("##############################################################################\n");
+			printf("Mesh : %s\n", name);
+			printf("##############################################################################\n");
+			std::vector<vertex_format> vvtx;
+			
+			std::vector<vector4>  vpos;
+			std::vector<vector2>  vuv;
+			std::vector<vector3>  vnor;
+			std::vector<uint32_t> vib;
+			
+			//頂点読み込み
+			auto uvelem = mesh->GetElementUV(0);
+			auto norelem = mesh->GetElementNormal(0);
+			{
+				auto cp = mesh->GetControlPoints();
+				printf("uvelem->GetIndexArray().GetCount()=%d\n", uvelem->GetIndexArray().GetCount());
+				printf("norelem->GetIndexArray().GetCount()=%d\n", norelem->GetIndexArray().GetCount());
+				for (int i = 0 ; i < mesh->GetControlPointsCount(); i++) {
+					auto curcp = cp[i];
+					vpos.push_back({float(curcp[0]), float(curcp[1]), float(curcp[2]), 1.0f});
+					
+					int normal_idx = i;
+					/*
+					if(norelem->GetReferenceMode() ==  FbxLayerElement::eIndexToDirect)
+                    				normal_idx = norelem->GetIndexArray().GetAt(i);
+					*/
+					auto curnor = norelem->GetDirectArray().GetAt(normal_idx);
+					vnor.push_back({float(curnor[0]), float(curnor[1]), float(curnor[2])});
+
+					int uv_idx = i;
+					/*
+					if(uvelem->GetReferenceMode() ==  FbxLayerElement::eIndexToDirect)
+                    				uv_idx = uvelem->GetIndexArray().GetAt(i);
+					*/
+					auto curuv = uvelem->GetDirectArray().GetAt(uv_idx);
+					printf("UV : uv_idx=%d : %.6f %.6f\n", uv_idx, float(curuv[0]), float(curuv[1]));
+					vuv.push_back({float(curuv[0]), float(curuv[1])});
+				}
+			}
+
+			//マテリアル情報表示
+			struct matinfo {
+				int offset;
+				int count;
+			};
+			std::map<int, matinfo> mmatinfo;
+			{
+				auto lMaterialIndice = &mesh->GetElementMaterial()->GetIndexArray();
+				auto lMaterialMappingMode = mesh->GetElementMaterial()->GetMappingMode();
+				if (lMaterialIndice && lMaterialMappingMode == FbxGeometryElement::eByPolygon)
+				{
+					printf("MAT : FbxGeometryElement::eByPolygon\n");
+					auto polygon_count = mesh->GetPolygonCount();
+					for ( int poly_index = 0; poly_index < polygon_count; poly_index++) {
+						auto lMaterialIndex = lMaterialIndice->GetAt(polygon_count);
+						mmatinfo[lMaterialIndex].count++;
+					}
+				} else {
+					printf("MAT : FbxGeometryElement::OTHER\n");
+				}
+				auto matcount = mmatinfo.size();
+				int off = 0;
+				for(int i = 0 ; i < matcount; i++) {
+					mmatinfo[i].offset = off;
+					off += mmatinfo[i].count * 3;
+				}
+				printf("mmatinfo.size() = %d\n", mmatinfo.size());
+			}
+
+			auto idxbuf = mesh->GetPolygonVertices();
+			for (int i = 0; i < mesh->GetPolygonVertexCount(); i++)
+				vib.push_back(idxbuf[i]);
+			/*
+			auto polygon_count = mesh->GetPolygonCount();
+			int count = 0;
+			for ( int poly_index = 0; poly_index < polygon_count; poly_index++)
+			
+			{
+				int lMaterialIndex = 0;
+				auto lMaterialIndice = &mesh->GetElementMaterial()->GetIndexArray();
+				auto lMaterialMappingMode = mesh->GetElementMaterial()->GetMappingMode();
+				if (lMaterialIndice && lMaterialMappingMode == FbxGeometryElement::eByPolygon)
+				{
+					lMaterialIndex = lMaterialIndice->GetAt(poly_index);
+				}
+				
+				for (int vertex_index = 0; vertex_index < 3; vertex_index++) {
+					const int lControlPointIndex = mesh->GetPolygonVertex(poly_index, vertex_index);
+
+					vib.push_back(lControlPointIndex);
+					printf("poly_index=%d, vertex_index=%d : idx=%d\n", poly_index, vertex_index, lControlPointIndex);
+				}
+				printf("\n");
+			}
+			
+			*/
+			
+			{
+				printf("-------------------------------------------------\n");
+				auto norelem = mesh->GetElementNormal(0);
+				if(norelem->GetMappingMode() == FbxLayerElement::eByControlPoint) {
+					printf("NORMAL : eByControlPoint\n");
+				}
+				if(norelem->GetMappingMode() == FbxLayerElement::eByPolygonVertex) {
+					printf("NORMAL : eByPolygonVertex\n");
+				}
+				auto uvelem = mesh->GetElementUV(0);
+				if(uvelem->GetMappingMode() == FbxLayerElement::eByControlPoint) {
+					printf("UV : eByControlPoint\n");
+				}
+				if(uvelem->GetMappingMode() == FbxLayerElement::eByPolygonVertex) {
+					printf("UV : eByPolygonVertex\n");
+				}
+				printf("GetUVLayerCount=%d\n", mesh->GetUVLayerCount());
+				printf("IsTriangleMesh=%d\n", mesh->IsTriangleMesh());
+				printf("vpos.size()=%d\n", vpos.size());
+				printf("vnor.size()=%d\n", vnor.size());
+				printf("vib.size()=%d\n", vib.size());
+				printf("vuv.size()=%d\n", vuv.size());
+				printf("-------------------------------------------------\n");
+			}
+			
+			for ( int i = 0; i < vib.size(); i++ ) {
+				vertex_format vfmt;
+				auto idx = vib[i];
+				vfmt.pos = vpos[idx];
+				
+				//vfmt.nor = vnor[idx];
+				//vfmt.uv = vuv[idx];
+				auto nor = norelem->GetDirectArray().GetAt(i);//norelem->GetIndexArray().GetAt(i));
+				auto uv = uvelem->GetDirectArray().GetAt(uvelem->GetIndexArray().GetAt(i));
+				
+				vfmt.nor.x = float(nor[0]);
+				vfmt.nor.y = float(nor[1]);
+				vfmt.nor.z = float(nor[2]);
+				
+				
+				vfmt.uv.x = float(uv[0]);
+				vfmt.uv.y = float(uv[1]);
+				printf("uv : %.6f %.6f\n", vfmt.uv.x, vfmt.uv.y);
+				vvtx.push_back(vfmt);
+			}
+
+			geo.mvtx[name] = vvtx;
+			geo.mib[name] = vib;
+		}
+		
+
+		for(auto & m : geo.mvtx) {
 			auto & name = m.first;
-			geo.mmaterial[name] = vmatname[0];
+			if(vmatname.empty()) {
+				geo.mmaterial[name] = "DEFAULT_NORMAL.tga";
+			} else {
+				geo.mmaterial[name] = vmatname[0];
+			}
 		}
 	}
 	fbxManager->Destroy();
@@ -1237,19 +1288,12 @@ int main() {
 		ShaderSlotMax = 8,
 		ResourceMax = 1024,
 	};
-	struct vertex_format {
-		vector4 pos;
-		vector2 uv;
-	};
-	struct mesh_data {
-		std::map<std::string, std::vector<vertex_format>> mvb;
-		std::map<std::string, std::vector<uint32_t>> mib;
-	};
+
 	vertex_format vtx[] = {
-		{{-1, 1, 0, 1}, {-1, 1}},
-		{{-1,-1, 0, 1}, {-1,-1}},
-		{{ 1, 1, 0, 1}, { 1, 1}},
-		{{ 1,-1, 0, 1}, { 1,-1}},
+		{{-1, 1, 0, 1}, {0,  1,  1}, {-1, 1}},
+		{{-1,-1, 0, 1}, {0,  1,  1}, {-1,-1}},
+		{{ 1, 1, 0, 1}, {0,  1,  1}, { 1, 1}},
+		{{ 1,-1, 0, 1}, {0,  1,  1}, { 1,-1}},
 	};
 	uint32_t idx[] = {
 		0, 1, 2,
@@ -1272,9 +1316,11 @@ int main() {
 		matrix4x4 view;
 	};
 	
-	LoadFbxToVector4("Yuko_win_humanoid.fbx", fbxgeo);
-	//LoadFbxToVector4("Utc_sum_humanoid.fbx", fbxgeo);
-	
+	LoadFbxFromFile("Yuko_win_humanoid.fbx", fbxgeo);
+	//LoadFbxFromFile("humanoid.fbx", fbxgeo);
+	//LoadFbxFromFile("Utc_sum_humanoid.fbx", fbxgeo);
+	//LoadFbxFromFile("Alicia_solid_Unity.FBX", fbxgeo);
+	printf("Done\n");
 	std::map<std::string, Image> mimage;
 	for(auto m : fbxgeo.mmaterial) {
 		Image img;
@@ -1283,38 +1329,6 @@ int main() {
 		ref.Load(m.second.c_str());
 	}
 	
-	printf("Done\n");
-	mesh_data mesh;
-	mesh.mib = fbxgeo.mib;
-	for(auto & m : fbxgeo.muv) {
-		auto & v = m.second;
-		printf("v size=%d\n", v.size());
-		for(int i = 0 ; i < v.size(); i++) {
-			//printf("%f %f\n", v[i].x, v[i].y);
-		}
-	}
-	for(auto & m : fbxgeo.mvb) {
-		std::vector<vertex_format> temp;
-		auto & name = m.first;
-		auto & vb = fbxgeo.mvb[name];
-		auto & ib = fbxgeo.mib[name];
-		auto & uv = fbxgeo.muv[name];
-		printf("name=%s\n", name.c_str());
-		printf("vb=%d\n", vb.size());
-		printf("ib=%d\n", ib.size());
-		printf("uv=%d\n", uv.size());
-		temp.resize(vb.size());
-		std::map<int, bool> mb;
-		for(auto & idx : ib) {
-			if(mb[idx] == false) {
-				temp[idx].pos = vb[idx];
-				temp[idx].uv = uv[idx];
-				mb[idx] = true;
-			}
-		}
-		mesh.mvb[name] = temp;
-	}
-
 	constdata cdata;
 	MatrixStack stack;
 	std::vector<cmd> vcmd;
@@ -1326,6 +1340,8 @@ int main() {
 			vcmd, texname, 0, 256, 256, vtex.data(), vtex.size() * sizeof(uint32_t), 256 * sizeof(uint32_t));
 	uint64_t frame = 0;
 	auto beforeoffscreenname = "offscreen" + std::to_string(1);
+	vector3 pos = {0, 65.999992, 71.999992};
+	vector3 dpos = {0, 0, 0};
 	while(Update()) {
 		auto buffer_index = frame % BufferMax;
 		auto indexname = std::to_string(buffer_index);
@@ -1334,10 +1350,39 @@ int main() {
 		auto constantname = "testconstant" + indexname;
 
 		bool is_update = false;
+		dpos.x *= 0.5;
+		dpos.y *= 0.5;
+		dpos.z *= 0.5;
 		if(GetAsyncKeyState(VK_F5) & 0x0001) {
 			is_update = true;
 		}
+		if(GetAsyncKeyState('W') & 0x8000) {
+			dpos.z -= 1.0f;
+		}
+		if(GetAsyncKeyState('S') & 0x8000) {
+			dpos.z += 1.0f;
+		}
+		if(GetAsyncKeyState('A') & 0x8000) {
+			dpos.x += 1.0f;
+		}
+		if(GetAsyncKeyState('D') & 0x8000) {
+			dpos.x -= 1.0f;
+		}
+		if(GetAsyncKeyState('R') & 0x8000) {
+			dpos.y += 1.0f;
+		}
+		if(GetAsyncKeyState('F') & 0x8000) {
+			dpos.y -= 1.0f;
+		}
+		if(GetAsyncKeyState('I') & 0x0001) {
+			printf("pos : %f %f %f\n", pos.x, pos.y, pos.z);
+		}
 
+		pos.x += dpos.x;
+		pos.y += dpos.y;
+		pos.z += dpos.z;
+		
+		
 		cdata.time.data[0] = float(frame) / 1000.0f;
 		cdata.time.data[1] = 0.0;
 		cdata.time.data[2] = 1.0;
@@ -1355,23 +1400,20 @@ int main() {
 		float tm = float(frame) * 0.01;
 		float rad = 1.5;
 		stack.LoadLookAt(
-				0, 0, 120,
-				0, 0, 0,
+				pos.x, pos.y, pos.z,
+				pos.x, pos.y, pos.z - 1,
 				0, 1, 0);
 		stack.GetTop(cdata.view.data);
 
 		
-		SetRenderTarget(vcmd, offscreenname, Width, Height);
-		ClearRenderTarget(vcmd, offscreenname, {0, 1, 1, 1});
-		ClearDepthRenderTarget(vcmd, offscreenname, 1.0f);
-		if(frame >= 1) {
-			SetTexture(vcmd, beforeoffscreenname, 1);
-		}
+		SetRenderTarget(vcmd, backbuffername, Width, Height);
+		ClearRenderTarget(vcmd, backbuffername, {0, 1, 1, 1});
+		ClearDepthRenderTarget(vcmd, backbuffername, 1.0f);
 		SetShader(vcmd, "test.hlsl", is_update);
 		SetConstant(vcmd, constantname, 0, &cdata, sizeof(cdata));
-		for(auto & x : mesh.mvb) {
-			auto & vb = mesh.mvb[x.first];
-			auto & ib = mesh.mib[x.first];
+		for(auto & x : fbxgeo.mvtx) {
+			auto & vb = fbxgeo.mvtx[x.first];
+			auto & ib = fbxgeo.mib[x.first];
 			auto & img = mimage[x.first];
 			SetTexture(vcmd, x.first + "_mat", 0, img.Width, img.Height, img.GetData(),
 				img.Width * img.Height * sizeof(uint32_t), img.Width * sizeof(uint32_t));
@@ -1383,6 +1425,7 @@ int main() {
 			DrawIndex(vcmd, x.first, 0, ib.size());
 		}
 
+		/*
 		SetRenderTarget(vcmd, backbuffername, Width, Height);
 		ClearRenderTarget(vcmd, backbuffername, {0, 0, 1, 1});
 		ClearDepthRenderTarget(vcmd, backbuffername, 1.0f);
@@ -1392,13 +1435,13 @@ int main() {
 		SetIndex(vcmd, ibname, idx, sizeof(idx));
 		SetConstant(vcmd, constantname, 0, &cdata, sizeof(cdata));
 		DrawIndex(vcmd, "presentdraw", 0, _countof(idx));
+		*/
 
 		SetBarrierToPresent(vcmd, backbuffername);
 		PresentGraphics(appname, vcmd, hwnd, Width, Height, BufferMax, ResourceMax, ShaderSlotMax);
 		beforeoffscreenname = offscreenname;
 		//DebugPrint(vcmd);
 		vcmd.clear();
-		printf("Frame=%d ========================================\n", frame);
 		frame++;
 	}
 	PresentGraphics(appname, vcmd, nullptr, Width, Height, BufferMax, ResourceMax, ShaderSlotMax);
